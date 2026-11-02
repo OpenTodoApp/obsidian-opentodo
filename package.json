@@ -1,0 +1,15 @@
+{
+  "name": "opentodo-obsidian",
+  "version": "0.20.0",
+  "private": true,
+  "description": "OpenTodo for Obsidian, built from OpenTodo (https://github.com/OpenTodoApp/OpenTodo, obsidian/). npm ci && npm run build writes main.js and styles.css here.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "build": "node obsidian/esbuild.config.mjs --outdir ."
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "obsidian": "1.14.4"
+  }
+}

@@ -1,0 +1,101 @@
+// A minimal hybrid logical clock: wall-clock milliseconds, nudged forward so
+// that timestamps issued by this device are strictly increasing even when the
+// system clock jumps backwards, and corrected towards server time when the
+// local clock is clearly off.
+import { resettable } from './moduleState'
+
+let last = 0
+let offset = 0
+
+/** How far ahead of the server's clock an op may be stamped (internal/sync MaxFutureSkewMs). */
+export const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000
+/** Skews up to this size are left alone, so network latency causes no jitter. */
+const SKEW_TOLERANCE_MS = 2000
+/** How far ahead of the server a refused clock may stay without restarting (hlcClockRefused). */
+const RESTART_AFTER_REFUSAL_MS = MAX_FUTURE_SKEW_MS / 2
+/**
+ * The meta row holding the offset to server time, so the service worker
+ * (public/push-sw.js), which writes ops from notification actions, stamps them
+ * with the same corrected clock (web-lint-and-test-hygiene).
+ */
+export const CLOCK_OFFSET_META = 'hlc_offset'
+/** The meta row holding the newest timestamp this device stamped or received. */
+export const HLC_META = 'hlc'
+
+export function hlcNow(): number {
+  const now = Date.now() + offset
+  last = Math.max(now, last + 1)
+  return last
+}
+
+/** Called with the last timestamp persisted by this device so a reload never reuses one. */
+export function hlcSeed(ts: number): void {
+  if (ts > last) last = ts
+}
+
+/**
+ * The receive rule of a hybrid logical clock: called with the newest timestamp
+ * of the ops this device received (sync pull, which the live stream and the
+ * relay only trigger). The clock moves past it, so the next local edit is
+ * stamped after every op this device has seen and wins last-writer-wins even
+ * when the local wall clock runs behind the writer's. Without it a re-encrypt
+ * on sight (e2ee) could tie with, and lose to, the plaintext op it replaces.
+ */
+export function hlcReceive(ts: number): void {
+  if (Number.isFinite(ts) && ts > last) last = ts
+}
+
+/**
+ * Called after each sync. The offset follows the server whenever the skew is
+ * large and goes back to zero once the local clock is right again (OpenSpec
+ * change sync-convergence). A seed far ahead of the server (a clock that ran
+ * fast before) is brought back to server time: the server refuses timestamps
+ * that far ahead.
+ */
+export function hlcObserveServerTime(serverTime: number | undefined): void {
+  if (typeof serverTime !== 'number' || !Number.isFinite(serverTime)) return
+  const skew = serverTime - Date.now()
+  offset = Math.abs(skew) > SKEW_TOLERANCE_MS ? skew : 0
+  if (last > serverTime + MAX_FUTURE_SKEW_MS) last = serverTime
+}
+
+/**
+ * Called when the server refused ops as stamped too far ahead (reason
+ * `clock_skew`, sync-convergence): the clock follows the server and, when it is
+ * more than half the accepted window ahead, restarts from the server's time, so
+ * the ops stamped again next are accepted. A clock closer than that keeps
+ * going: it holds the stamps an earlier refusal of the same exchange just
+ * handed out, and going back below them would stamp a later edit before an
+ * earlier one (issue #651).
+ */
+export function hlcClockRefused(serverTime: number): void {
+  hlcObserveServerTime(serverTime)
+  if (Number.isFinite(serverTime) && last > serverTime + RESTART_AFTER_REFUSAL_MS) last = serverTime
+}
+
+export function hlcLast(): number {
+  return last
+}
+
+/** The current correction towards server time, in milliseconds. */
+export function hlcOffset(): number {
+  return offset
+}
+
+/** Called at start-up with the stored offset, so stamps before the first sync are corrected too. */
+export function hlcSeedOffset(stored: number): void {
+  if (Number.isFinite(stored)) offset = stored
+}
+
+/** Test hook: forget the clock state (registered with resetModuleState). */
+export function hlcReset(): void {
+  last = 0
+  offset = 0
+}
+resettable('hlc', hlcReset)
+
+/** Last-writer-wins comparison shared with the server (see internal/sync/ops.go). */
+export function wins(ts: number, device: string, existing?: { ts: number; device: string }): boolean {
+  if (!existing) return true
+  return ts > existing.ts || (ts === existing.ts && device > existing.device)
+}
