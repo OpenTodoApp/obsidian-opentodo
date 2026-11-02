@@ -1,6 +1,6 @@
 {
   "name": "opentodo-obsidian",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "private": true,
   "description": "OpenTodo for Obsidian, built from OpenTodo (https://github.com/OpenTodoApp/OpenTodo, obsidian/). npm ci && npm run build writes main.js and styles.css here.",
   "license": "AGPL-3.0-only",
