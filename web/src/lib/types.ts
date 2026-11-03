@@ -443,12 +443,39 @@ export interface Label extends LabelFields {
 
 export type ViewKind = 'list' | 'dashboard'
 export type GroupBy = 'project' | 'due' | 'priority' | 'label' | 'none'
-export type SortBy = 'due' | 'priority' | 'position' | 'created' | 'title' | 'deadline'
+export type FieldSortBy = `field:${string}`
+export type SortBy = 'due' | 'priority' | 'position' | 'created' | 'title' | 'deadline' | FieldSortBy
 export type SortDir = 'asc' | 'desc'
 
 export const VIEW_KINDS: readonly ViewKind[] = ['list', 'dashboard']
 export const GROUP_BY_OPTIONS: readonly GroupBy[] = ['project', 'due', 'priority', 'label', 'none']
 export const SORT_BY_OPTIONS: readonly SortBy[] = ['due', 'priority', 'position', 'created', 'deadline', 'title']
+
+const FIELD_SORT_PREFIX = 'field:'
+const FIELD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+/** Client parsing is deliberately tolerant: sync preserves strings the REST API rejects. */
+export function fieldSortId(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.startsWith(FIELD_SORT_PREFIX)) return null
+  const id = value.slice(FIELD_SORT_PREFIX.length)
+  return FIELD_ID_PATTERN.test(id) ? id : null
+}
+
+export function fieldSortBy(id: string): FieldSortBy {
+  return `${FIELD_SORT_PREFIX}${id}`
+}
+
+/** Whether a stored or selected sort value names a custom field by its definition id. */
+export function isFieldSortBy(value: unknown): value is FieldSortBy {
+  return fieldSortId(value) !== null
+}
+
+/** A stored sort_by as one page reads it: a field sort, an allowed option, or the fallback. */
+export function readSortBy(value: unknown, options: readonly SortBy[], fallback: SortBy): SortBy {
+  if (isFieldSortBy(value)) return value
+  return typeof value === 'string' && options.includes(value as SortBy) ? value as SortBy : fallback
+}
+
 export const SORT_DIR_OPTIONS: readonly SortDir[] = ['asc', 'desc']
 export type ViewLayout = 'list' | 'board'
 export const VIEW_LAYOUTS: readonly ViewLayout[] = ['list', 'board']
@@ -1928,9 +1955,19 @@ export type ImportFormat =
   | 'opentodo' | 'things-db' | 'json-items' | 'json-lists' | 'json-generic'
   | 'todoist-csv' | 'todoist-backup' | 'ticktick-csv' | 'linear-csv' | 'csv'
   | 'google-tasks-json' | 'trello-json' | 'asana-csv' | 'microsoft-todo-json' | 'apple-reminders-json' | 'anydo-json'
+  | 'notion-csv'
+  | 'omnifocus-csv'
+  | 'super-productivity-json'
+  | 'tududi-db'
+  | 'vikunja-export'
 export const IMPORT_FORMATS: readonly ImportFormat[] = [
   'opentodo', 'todoist-backup', 'todoist-csv', 'things-db', 'ticktick-csv', 'linear-csv',
   'google-tasks-json', 'trello-json', 'asana-csv', 'microsoft-todo-json', 'apple-reminders-json', 'anydo-json',
+  'vikunja-export',
+  'tududi-db',
+  'super-productivity-json',
+  'omnifocus-csv',
+  'notion-csv',
   'json-items', 'json-lists', 'json-generic', 'csv',
 ]
 
@@ -1947,7 +1984,16 @@ export interface ImportOptions {
   existing?: 'skip' | 'overwrite'
   /** Workspace id that receives what the import creates (import-workspace); omitted = default, or an own export's own mapping. */
   workspace?: string
+  /**
+   * A Notion export's column per role (migration-everywhere D3): a column name,
+   * or null for "not imported"; a role left out keeps the preview's guess.
+   */
+  columns?: Partial<Record<NotionRole, string | null>>
 }
+
+/** The roles a Notion database's columns can take, in the order the preview shows them. */
+export const NOTION_ROLES = ['status', 'due', 'labels', 'priority', 'project', 'notes'] as const
+export type NotionRole = typeof NOTION_ROLES[number]
 
 export interface ImportTotals {
   rows: number
@@ -1992,7 +2038,10 @@ export interface ImportRow {
 export interface ImportPreview {
   format: ImportFormat
   version?: number
-  columns?: { recognised: string[]; ignored: string[] }
+  /** CSV columns used and ignored; for a Notion export also the column of each role and every column it can use. */
+  columns?: { recognised: string[]; ignored: string[]; roles?: Partial<Record<NotionRole, string | null>>; available?: string[] }
+  /** The format the file looks like when another one was chosen (migration-everywhere). */
+  detected?: ImportFormat
   options: ImportOptions
   totals: ImportTotals
   rows: ImportRow[]
