@@ -2,7 +2,7 @@
 // Declare a field in internal/sync/ops.go, then run
 // UPDATE_OP_SCHEMA=1 go test ./internal/sync -run TestGeneratedOpSchema
 import type {
-  Attachment, Comment, CustomTheme, Due, Entity, FieldDef, Frame, Geo, Label, MemoryItem, Note, Objective, OnDropRule, Origin, Place, Priority, Project, ProjectPrefs, Reminder, ReminderKind, Review, RoutineStep, Rule, RuleActions, RuleCondition, RuleTrigger, Section, Slot, SplitFrom, Task, TaskLocation, ThemeDocument, TimeEntry, UserPrefs, View,
+  Attachment, Comment, CustomTheme, Due, Entity, FieldDef, Frame, Geo, HabitTally, Label, MemoryItem, Note, Objective, OnDropRule, Origin, Place, Priority, Project, ProjectPrefs, Reminder, ReminderKind, Review, RoutineStep, Rule, RuleActions, RuleCondition, RuleTrigger, Section, Slot, SplitFrom, Task, TaskLocation, ThemeDocument, TimeEntry, UserPrefs, View,
 } from '../lib/types'
 
 /**
@@ -195,12 +195,52 @@ export interface TaskFields {
    */
   notes_doc?: string
   /**
-   * Habit tracking (OpenSpec change habits, design D1): habit flags a
-   * series as a habit; skipped marks an occurrence record written by a
-   * skip rather than a completion. Additive booleans, not content.
+   * Habit tracking (habits D1): habit flags a series as a habit; skipped
+   * marks a record written by a skip. Additive booleans, not content.
    */
   habit?: boolean
   skipped?: boolean
+  /**
+   * The habit's tiny version and anchor (OpenSpec change habits-home,
+   * design D5): the two-minute version that still counts ("One page") and
+   * the moment it follows ("After dinner"). User-written text, so content;
+   * additive. Records copy them with the series' other fields, harmlessly.
+   */
+  habit_tiny?: string
+  habit_anchor?: string
+  /**
+   * When the habit was graduated (habits-home D7), Unix ms, or null: a
+   * graduated habit is in no list, projection, reminder or Today limit and
+   * keeps its records; Resume continues it as a new piece of its lineage.
+   * Not content; additive.
+   */
+  habit_graduated_at?: number | null
+  /**
+   * The habit's own colour (OpenSpec change habits-polish, design D5): a
+   * palette hex such as "#22c55e", or "" for automatic (the project's
+   * colour, else one picked from the id). Not content, like project
+   * colours; additive.
+   */
+  habit_color?: string
+  /**
+   * habit-targets D1: check-ins a period needs (0 none, at most 31) and
+   * the period ("", "week", "month"). Not content.
+   */
+  habit_target?: number
+  habit_period?: string
+  /**
+   * habit-targets D2: the day's goal (0 none), the check button's step
+   * and the unit (content); the day's amount sums its habit_tally rows.
+   */
+  habit_amount?: number
+  habit_step?: number
+  habit_unit?: string
+  /**
+   * An occurrence record logged as the habit's tiny version (habits-home
+   * D5): set in the completion batch, never copied from the series; a
+   * full completion writes false. Not content; additive.
+   */
+  tiny?: boolean
   /**
    * Account id of whoever completed the task, or null (OpenSpec change
    * completed-date-filters, design D5); additive. Written beside
@@ -218,9 +258,8 @@ export interface TaskFields {
    */
   location?: TaskLocation | string | null
   /**
-   * A start guide sample task (OpenSpec change moments-and-onboarding,
-   * design D3): excluded from Statistics, the Loop pulse and the digest,
-   * kept on completion. A whole boolean, not content; additive.
+   * A start guide sample task (moments-and-onboarding D3): excluded from
+   * Statistics, the Loop pulse and the digest. Not content; additive.
    */
   sample?: boolean
   /**
@@ -321,6 +360,18 @@ export interface NoteFields {
    * a note with a project follows its project, as task.workspace_id.
    */
   workspace_id?: string | null
+  /**
+   * A template (note-templates D1): the note is offered under From
+   * template… and New note copies it; otherwise a note like any other.
+   */
+  template?: boolean
+  /**
+   * A daily note's day, YYYY-MM-DD (daily-notes D1); "" for any other
+   * note. Set once at creation, only on the note whose id is the
+   * name-based id of its author and that day (NameID("daily-note",
+   * user + ":" + day)), so the same day is one note on every device.
+   */
+  day?: string
 }
 
 /**
@@ -393,6 +444,12 @@ export interface ViewFields {
    * not user text, so not content; missing reads as off.
    */
   card_notes?: boolean
+  /**
+   * Nest subtasks in the List layout (GitHub issue 1108): "nested" shows a
+   * match under its parent when both match, as Today's option does; "" or
+   * any other value is the flat list.
+   */
+  subtasks?: string
   created_at?: number
   deleted_at?: number | null
   /** Workspace of the view, null for the default (OpenSpec change workspaces). */
@@ -476,6 +533,17 @@ export interface CommentFields {
 export interface AttachmentFields {
   task_id?: string
   comment_id?: string | null
+  /**
+   * The standalone note an attachment belongs to instead of a task
+   * (note-attachments D1): exactly one of task_id and note_id is set.
+   */
+  note_id?: string | null
+  /**
+   * The attachment whose stored file this one shares (note-attachments
+   * D3): a note's copy names the original's bytes instead of uploading
+   * them again; the content route serves that file.
+   */
+  file_id?: string | null
   name?: string
   mime?: string
   size?: number
@@ -527,6 +595,21 @@ export interface TimeEntryFields {
    * ms), null for Flowtime and other entries. Never before started_at.
    */
   planned_end_at?: number | null
+}
+
+/**
+ * habit_tally: one device's count toward a day of an amount habit
+ * (habit-targets D2), id NameID(series_id:date:device), in its series'
+ * scope; series_id, date and device never change (habittally.go).
+ * A row written before a field existed lacks it, so every field is optional here; the entity type may require it.
+ */
+export interface HabitTallyFields {
+  series_id?: string
+  date?: string | null
+  device?: string
+  count?: number
+  created_at?: number
+  deleted_at?: number | null
 }
 
 /**
@@ -1008,6 +1091,12 @@ export interface UserPrefsFields {
    */
   objectives?: string
   /**
+   * Habits (habits-home D1): "" not decided (reads as on while the device
+   * holds an open habit), "on" or "off" (hides every habit control). An
+   * unknown value reads as not decided. REST, the CLI and MCP keep habits.
+   */
+  habits?: string
+  /**
    * Full task titles (OpenSpec change full-task-titles, design D1): "on"
    * shows every task title in list rows, on board cards and in Today in
    * full, wrapped onto as many lines as it takes, instead of cutting it
@@ -1096,6 +1185,16 @@ export interface UserPrefsFields {
   priority_name_2?: string
   priority_name_3?: string
   priority_name_4?: string
+  /**
+   * Daily notes (OpenSpec change daily-notes, design D1): one note per
+   * day, opened with g j; off by default. The project new daily notes go
+   * to ("" for none) and their template: "" the built-in Daily, "none" no
+   * template, otherwise a template note's id (an unknown id reads as the
+   * built-in Daily and is kept).
+   */
+  daily_notes?: boolean
+  daily_notes_project?: string
+  daily_notes_template?: string
 }
 
 /**
@@ -1201,7 +1300,7 @@ export const OP_DEFAULTS = {
     name: '', color: '#64748b', position: 0, archived: false, parent_id: null, created_at: 0, deleted_at: null, icon: null, description: '', notes_doc: '', workspace_id: null, flow_mode: '', status: '', reusable: false, aisles: false,
   } satisfies Omit<Project, 'id' | '_clock'>,
   task: {
-    title: '', description: '', project_id: null, parent_id: null, priority: 4, due: null, labels: [], position: 0, created_at: 0, completed_at: null, deleted_at: null, estimate_minutes: null, deadline: null, start: null, evening: false, span: false, day_part: null, energy: '', sector: '', flow_mode: '', blocked_by: [], note_mentions: [], rotation: [], recurrence: null, series_id: null, occurrence_date: null, split_from: null, assignee_id: null, section_id: null, ical_extra: null, notes_doc: '', habit: false, skipped: false, completed_by: null, origin: null, location: null, sample: false, workspace_id: null, fields: {}, appends: {},
+    title: '', description: '', project_id: null, parent_id: null, priority: 4, due: null, labels: [], position: 0, created_at: 0, completed_at: null, deleted_at: null, estimate_minutes: null, deadline: null, start: null, evening: false, span: false, day_part: null, energy: '', sector: '', flow_mode: '', blocked_by: [], note_mentions: [], rotation: [], recurrence: null, series_id: null, occurrence_date: null, split_from: null, assignee_id: null, section_id: null, ical_extra: null, notes_doc: '', habit: false, skipped: false, habit_tiny: '', habit_anchor: '', habit_graduated_at: null, habit_color: '', habit_target: 0, habit_period: '', habit_amount: 0, habit_step: 1, habit_unit: '', tiny: false, completed_by: null, origin: null, location: null, sample: false, workspace_id: null, fields: {}, appends: {},
   } satisfies Omit<Task, 'id' | '_clock'>,
   section: {
     name: '', project_id: '', position: 0, created_at: 0, deleted_at: null, color: null, icon: null, flow_mode: '', aisle: null,
@@ -1210,13 +1309,13 @@ export const OP_DEFAULTS = {
     name: '', project_id: '', type: 'text', options: '', position: 0, created_at: 0, deleted_at: null,
   } satisfies Omit<FieldDef, 'id' | '_clock'>,
   note: {
-    title: '', notes_doc: '', description: '', project_id: null, labels: [], position: 0, created_at: 0, deleted_at: null, workspace_id: null, appends: {},
+    title: '', notes_doc: '', description: '', project_id: null, labels: [], position: 0, created_at: 0, deleted_at: null, workspace_id: null, template: false, day: '', appends: {},
   } satisfies Omit<Note, 'id' | '_clock'>,
   label: {
     name: '', color: '#64748b', position: 0, created_at: 0, deleted_at: null, workspace_id: null, group_by: '', sort_by: '', sort_dir: '', row_layout: '', manual_order: [],
   } satisfies Omit<Label, 'id' | '_clock'>,
   view: {
-    name: '', query: '', kind: 'list', group_by: 'project', sort_by: 'due', sort_dir: 'asc', pinned: false, position: 0, color: '#64748b', panels: [], on_drop: null, layout: 'list', show_completed: false, hidden_props: [], row_layout: '', card_notes: false, created_at: 0, deleted_at: null, workspace_id: null, icon: null, manual_order: [],
+    name: '', query: '', kind: 'list', group_by: 'project', sort_by: 'due', sort_dir: 'asc', pinned: false, position: 0, color: '#64748b', panels: [], on_drop: null, layout: 'list', show_completed: false, hidden_props: [], row_layout: '', card_notes: false, subtasks: '', created_at: 0, deleted_at: null, workspace_id: null, icon: null, manual_order: [],
   } satisfies Omit<View, 'id' | '_clock'>,
   reminder: {
     task_id: '', kind: 'relative', offset_minutes: null, fire_at: null, delivered_at: null, dismissed_at: null, created_at: 0, deleted_at: null, radius_m: null,
@@ -1225,11 +1324,14 @@ export const OP_DEFAULTS = {
     task_id: '', parent_id: null, body: '', author_id: '', mentions: [], created_at: 0, edited_at: null, deleted_at: null, guest_name: null, page_id: null, reactions: {},
   } satisfies Omit<Comment, 'id' | '_clock'>,
   attachment: {
-    task_id: '', comment_id: null, name: '', mime: 'application/octet-stream', size: 0, sha256: '', url: null, encrypted: false, author_id: '', created_at: 0, uploaded_at: null, deleted_at: null,
+    task_id: '', comment_id: null, note_id: null, file_id: null, name: '', mime: 'application/octet-stream', size: 0, sha256: '', url: null, encrypted: false, author_id: '', created_at: 0, uploaded_at: null, deleted_at: null,
   } satisfies Omit<Attachment, 'id' | '_clock'>,
   time_entry: {
     task_id: '', user_id: '', started_at: 0, ended_at: null, device_id: '', note: '', created_at: 0, deleted_at: null, focus_mode: '', focus_session: 0, planned_end_at: null,
   } satisfies Omit<TimeEntry, 'id' | '_clock'>,
+  habit_tally: {
+    series_id: '', date: null, device: '', count: 0, created_at: 0, deleted_at: null,
+  } satisfies Omit<HabitTally, 'id' | '_clock'>,
   rule: {
     name: '', enabled: false, trigger: null, condition: null, actions: null, steps: null, ai_apply: '', ai_budget: 0, project_id: null, workspace_id: null, position: 0, created_at: 0, deleted_at: null,
   } satisfies Omit<Rule, 'id' | '_clock'>,
@@ -1249,7 +1351,7 @@ export const OP_DEFAULTS = {
     feed_seen_at: 0, reviewed_at: 0, group_by: '', sort_by: '', sort_dir: '', row_layout: '', review_every: '', card_notes: false,
   } satisfies Omit<ProjectPrefs, 'id' | '_clock'>,
   user_prefs: {
-    date_format: 'system', time_format: 'system', week_start: 'system', day_start: '', theme_mode: 'system', theme_accent: 'emerald', theme_accent_custom: '', theme_light: '', theme_dark: '', sidebar_destinations: '', density: '', row_detail: '', favourites: '', first_run: '', welcome: '', method_mode: '', time_sectors: '', start_checklist: '', language: 'system', focus_mode: '', focus_auto_start: '', focus_sound: '', focus_work_minutes: 0, focus_short_break_minutes: 0, focus_long_break_minutes: 0, focus_long_break_every: 0, focus_break_after_minutes: 0, maps: '', haptics: '', briefing: '', task_open: '', row_layout: '', today_events: '', today_assignees: '', upcoming_events: '', add_position: '', reminder_default_timed: '', reminder_default_dated: '', sidebar_counts: '', sidebar_order: '', focus_presets: '', focus_noise: '', focus_alert: '', day_parts: '', today_limit: 0, today_done: '', focus_style: '', energy: '', bento_order: '', formatting_toggle: '', routines_seen_at: 0, routines_hide_successes: '', upcoming_today: '', objectives: '', full_titles: '', today_group_by: '', today_sort_by: '', today_sort_dir: '', today_row_layout: '', today_subtasks: '', upcoming_sort_by: '', upcoming_sort_dir: '', upcoming_row_layout: '', upcoming_subtasks: '', upcoming_later: '', inbox_group_by: '', inbox_sort_by: '', inbox_sort_dir: '', inbox_row_layout: '', priority_name_1: '', priority_name_2: '', priority_name_3: '', priority_name_4: '',
+    date_format: 'system', time_format: 'system', week_start: 'system', day_start: '', theme_mode: 'system', theme_accent: 'emerald', theme_accent_custom: '', theme_light: '', theme_dark: '', sidebar_destinations: '', density: '', row_detail: '', favourites: '', first_run: '', welcome: '', method_mode: '', time_sectors: '', start_checklist: '', language: 'system', focus_mode: '', focus_auto_start: '', focus_sound: '', focus_work_minutes: 0, focus_short_break_minutes: 0, focus_long_break_minutes: 0, focus_long_break_every: 0, focus_break_after_minutes: 0, maps: '', haptics: '', briefing: '', task_open: '', row_layout: '', today_events: '', today_assignees: '', upcoming_events: '', add_position: '', reminder_default_timed: '', reminder_default_dated: '', sidebar_counts: '', sidebar_order: '', focus_presets: '', focus_noise: '', focus_alert: '', day_parts: '', today_limit: 0, today_done: '', focus_style: '', energy: '', bento_order: '', formatting_toggle: '', routines_seen_at: 0, routines_hide_successes: '', upcoming_today: '', objectives: '', habits: '', full_titles: '', today_group_by: '', today_sort_by: '', today_sort_dir: '', today_row_layout: '', today_subtasks: '', upcoming_sort_by: '', upcoming_sort_dir: '', upcoming_row_layout: '', upcoming_subtasks: '', upcoming_later: '', inbox_group_by: '', inbox_sort_by: '', inbox_sort_dir: '', inbox_row_layout: '', priority_name_1: '', priority_name_2: '', priority_name_3: '', priority_name_4: '', daily_notes: false, daily_notes_project: '', daily_notes_template: '',
   } satisfies Omit<UserPrefs, 'id' | '_clock'>,
   objective: {
     title: '', period: '', position: 0, done_at: 0, created_at: 0, deleted_at: null,
@@ -1265,7 +1367,7 @@ export const OP_DEFAULTS = {
 /** User-written fields a device encrypts for an account with end-to-end encryption (e2ee D2). */
 export const OP_CONTENT_FIELDS: Partial<Record<Entity, readonly string[]>> = {
   project: ['name', 'description', 'notes_doc'],
-  task: ['title', 'description', 'ical_extra', 'notes_doc', 'origin', 'location'],
+  task: ['title', 'description', 'ical_extra', 'notes_doc', 'habit_tiny', 'habit_anchor', 'habit_unit', 'origin', 'location'],
   section: ['name'],
   field: ['name', 'options'],
   note: ['title', 'notes_doc', 'description'],

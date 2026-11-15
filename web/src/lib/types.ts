@@ -1,12 +1,12 @@
 // Shared data types. Field names mirror the server op schema exactly
 // (internal/sync/ops.go); never rename a field without a migration plan.
 
-import type { AttachmentFields, CommentFields, FieldDefFields, FrameFields, CustomThemeFields, ObjectiveFields, MemoryItemFields, LabelFields, NoteFields, PlaceFields, ProjectFields, ProjectPrefsFields, ReminderFields, ReviewFields, RuleFields, SectionFields, SlotFields, TaskFields, TimeEntryFields, UserPrefsFields, ViewFields } from '../generated/opSchema'
+import type { AttachmentFields, CommentFields, FieldDefFields, FrameFields, CustomThemeFields, HabitTallyFields, ObjectiveFields, MemoryItemFields, LabelFields, NoteFields, PlaceFields, ProjectFields, ProjectPrefsFields, ReminderFields, ReviewFields, RuleFields, SectionFields, SlotFields, TaskFields, TimeEntryFields, UserPrefsFields, ViewFields } from '../generated/opSchema'
 import type { LanguageCode } from '../locales'
 import type { ThemeDocument } from './theme/format'
 
-export type Entity = 'project' | 'task' | 'label' | 'view' | 'reminder' | 'section' | 'comment' | 'project_prefs' | 'user_prefs' | 'attachment' | 'field' | 'review' | 'time_entry' | 'place' | 'rule' | 'frame' | 'slot' | 'note' | 'theme' | 'objective' | 'memory'
-export const ENTITIES: readonly Entity[] = ['project', 'task', 'label', 'view', 'reminder', 'section', 'comment', 'project_prefs', 'user_prefs', 'attachment', 'field', 'review', 'time_entry', 'place', 'rule', 'frame', 'slot', 'note', 'theme', 'objective', 'memory']
+export type Entity = 'project' | 'task' | 'label' | 'view' | 'reminder' | 'section' | 'comment' | 'project_prefs' | 'user_prefs' | 'attachment' | 'field' | 'review' | 'time_entry' | 'place' | 'rule' | 'frame' | 'slot' | 'note' | 'theme' | 'objective' | 'memory' | 'habit_tally'
+export const ENTITIES: readonly Entity[] = ['project', 'task', 'label', 'view', 'reminder', 'section', 'comment', 'project_prefs', 'user_prefs', 'attachment', 'field', 'review', 'time_entry', 'place', 'rule', 'frame', 'slot', 'note', 'theme', 'objective', 'memory', 'habit_tally']
 
 export interface Op {
   id: string
@@ -528,6 +528,8 @@ export interface View extends ViewFields {
   hidden_props?: string[]
   /** The view's row layout (row-layouts D1): 'line' or 'detailed'; '' or absent follows the account's. */
   row_layout?: string
+  /** List layout only: 'nested' shows a match under its matching parent (GitHub issue 1108); else the flat list. */
+  subtasks?: string
   created_at: number
   deleted_at: number | null
   /** Workspace id (OpenSpec change `workspaces`), null or absent for the default workspace. Read with `workspaceOf` from lib/workspaces.ts. */
@@ -557,7 +559,8 @@ export interface OnDropRule {
 }
 
 /** Trigger kinds of an automation rule (automation-rules "Rule validation"). */
-export const RULE_TRIGGERS = ['task.created', 'task.completed', 'task.reopened', 'label.added', 'label.removed', 'assigned.to_me', 'task.moved', 'due.reached', 'overdue', 'schedule', 'manual'] as const
+export const RULE_TRIGGERS = ['task.created', 'task.completed', 'task.reopened', 'label.added', 'label.removed', 'assigned.to_me', 'task.moved', 'due.reached', 'overdue', 'schedule', 'manual',
+  'note.created', 'note.edited', 'note.label.added'] as const
 export type RuleTriggerKind = (typeof RULE_TRIGGERS)[number]
 
 /** An automation rule's trigger: one kind with the members it takes. */
@@ -571,6 +574,8 @@ export interface RuleTrigger {
   weekdays?: number[]
   /** `schedule` instead of weekdays: days of the month, 1 to 31 or "last" (routines-dynamic-data D5). */
   month_days?: (number | 'last')[]
+  /** `manual`: what it runs on, a task (also when absent) or a note (notes-in-routines D2). */
+  on?: 'task' | 'note'
 }
 
 /** A date predicate (`due`, `deadline`). */
@@ -647,6 +652,8 @@ export interface RoutineRun {
   run_id: string
   rule_id: string
   task_id?: string
+  /** The standalone note a note routine ran on (notes-in-routines). */
+  note_id?: string
   at: number
   outcome: RuleRun['outcome'] | 'ended' | 'proposal' | 'waiting_device' | 'missed'
   reason?: string
@@ -797,7 +804,7 @@ export interface Rule extends RuleFields {
 }
 
 /** The type of a routine step's output (routines-engine D3); lines is a list of text. */
-export type RoutineStepType = 'text' | 'task' | 'tasks' | 'project' | 'date' | 'number' | 'lines' | 'none'
+export type RoutineStepType = 'text' | 'task' | 'tasks' | 'note' | 'notes' | 'project' | 'date' | 'number' | 'lines' | 'none'
 
 /** A step input: a reference to the trigger, an earlier step or a Repeat's item, or a literal. */
 export type RoutineArg = { ref: string } | { literal: unknown }
@@ -892,6 +899,24 @@ export interface TimeEntry extends TimeEntryFields {
   /** The device that started or logged it ("server" for the REST API). */
   device_id: string
   note: string
+  created_at: number
+  deleted_at: number | null
+  _clock: Clock
+}
+
+/**
+ * One device's count toward one day of an amount habit (OpenSpec
+ * `habit-targets`, D2). Its id is `nameId(series_id:date:device)`, so each
+ * device writes only its own row; the day's amount is the sum of the day's
+ * live tallies (lib/habits.ts `amountsOf`). It syncs in its series' scope.
+ */
+export interface HabitTally extends HabitTallyFields {
+  id: string
+  series_id: string
+  /** The day the count is toward, YYYY-MM-DD (null only before its op arrives). */
+  date: string | null
+  device: string
+  count: number
   created_at: number
   deleted_at: number | null
   _clock: Clock
@@ -1186,6 +1211,8 @@ export interface Profile {
   emailManagedBy?: string
   /** Whether an email change waits for a link (otherwise it applies at once). */
   emailByLink: boolean
+  /** Whether the address was confirmed by a link; absent from older servers (confirm-current-email). */
+  emailVerified?: boolean
 }
 
 /**
@@ -1369,6 +1396,8 @@ export interface CalendarConnection {
   include_date_only: boolean
   /** The part of the account written to the calendar (sync-scope); absent from older servers: all. */
   scope?: SyncScope
+  /** Projects matched to calendars of the connection (calsync-project-calendars); empty or absent: one calendar. */
+  project_calendars?: Record<string, string>
   enabled: boolean
   state: 'off' | 'choose_calendar' | 'pending' | 'ok' | 'failed' | 'reconnect' | 'stopped'
   next_sync_at: number
@@ -1413,6 +1442,8 @@ export interface CalendarConnectionPatch {
   enabled?: boolean
   password?: string
   scope?: SyncScope
+  /** Replaces the project-to-calendar matches; {} is one calendar again. */
+  project_calendars?: Record<string, string>
 }
 
 /**
@@ -1703,6 +1734,7 @@ export interface ProjectInvitePreview extends InvitationPreview {
 export type WebhookEvent =
   | 'task.created' | 'task.updated' | 'task.completed' | 'task.reopened' | 'task.deleted'
   | 'comment.created' | 'comment.updated' | 'comment.deleted'
+  | 'note.created' | 'note.updated' | 'note.deleted'
   | 'project.created' | 'project.updated' | 'project.archived' | 'project.deleted'
   | 'import.completed' | 'import.undone' | 'rule.fired'
 
@@ -1779,6 +1811,8 @@ export interface AppPassword {
   revokedAt: number | null
   /** Absent from servers before sync-scope: the whole account. */
   scope?: SyncScope
+  /** Shows the calendars as events instead of to-dos (caldav-events); absent means to-dos. */
+  events?: boolean
 }
 
 export interface WebhookDelivery {
@@ -2022,6 +2056,7 @@ export type ImportFormat =
   | 'super-productivity-json'
   | 'tududi-db'
   | 'vikunja-export'
+  | 'ics'
 export const IMPORT_FORMATS: readonly ImportFormat[] = [
   'opentodo', 'todoist-backup', 'todoist-csv', 'things-db', 'ticktick-csv', 'linear-csv',
   'google-tasks-json', 'trello-json', 'asana-csv', 'microsoft-todo-json', 'apple-reminders-json', 'anydo-json',
@@ -2030,6 +2065,7 @@ export const IMPORT_FORMATS: readonly ImportFormat[] = [
   'super-productivity-json',
   'omnifocus-csv',
   'notion-csv',
+  'ics',
   'json-items', 'json-lists', 'json-generic', 'csv',
 ]
 
@@ -2464,6 +2500,8 @@ export interface PublicLink {
   projectId: string
   rights: 'view' | 'tick'
   name: string | null
+  /** A list, or a board with a column per section (public-link-board); absent from older servers: list. */
+  layout?: 'list' | 'board'
   createdBy: string
   createdByName?: string
   createdAt: number
@@ -2520,7 +2558,55 @@ export interface OwnTaskPage extends Omit<TaskPageStatus, 'encrypted'> {
   encrypted: boolean
   snapshotVersion: number
   wrappedKey?: string
+  /** A task or a note page (note-public-links D1); absent from older servers: task. */
+  kind?: 'task' | 'note'
+  /** The published note of a note page (its taskId is empty). */
+  noteId?: string
 }
+
+/** The answer to publishing a note page (OpenSpec `note-public-links`): the link is returned once. */
+export interface NotePageCreated {
+  id: string
+  noteId: string
+  label: string | null
+  encrypted: boolean
+  publishedAt: number
+  expiresAt: number | null
+  link: string
+}
+
+/** A note's active page as its publisher, owner and admins see it: never the secret or a key. */
+export interface NotePageStatus {
+  id: string
+  noteId: string
+  label: string | null
+  createdBy: string
+  publishedAt: number
+  expiresAt: number | null
+  lastOpenedAt: number | null
+  encrypted: boolean
+  snapshotAt: number | null
+}
+
+/** What a note page shows (live from the server, or decrypted from a snapshot). */
+export interface NotePageContent {
+  title: string
+  /** The note's Markdown with links to notes, tasks and projects reduced to their text. */
+  text: string
+  /** When the text last changed (Unix ms). */
+  changedAt: number
+  links: { id: string; name: string; url: string }[]
+  /** Files of a live page; `image` ones are shown in place. */
+  files: { id: string; name: string; size: number | null; image: boolean }[]
+  /** An encrypted page: the note had images or files the page leaves out. */
+  omitted?: boolean
+}
+
+/** A note page as the guest's browser receives it. */
+export type NotePageResponse = { kind: 'note'; rights: 'view'; serverTime: number; label: string | null } & (
+  | ({ mode: 'live' } & NotePageContent)
+  | { mode: 'encrypted'; snapshot: string; snapshotAt: number | null }
+)
 
 /** What a task page shows (live from the server, or decrypted from a snapshot). */
 export interface TaskPageContent {
@@ -2539,7 +2625,7 @@ export interface TaskPageContent {
 }
 
 /** A task page as the guest's browser receives it. */
-export type TaskPageResponse = { rights: TaskPageRights; serverTime: number; label: string | null } & (
+export type TaskPageResponse = { kind?: 'task'; rights: TaskPageRights; serverTime: number; label: string | null } & (
   | ({ mode: 'live' } & TaskPageContent)
   | { mode: 'encrypted'; snapshot: string; snapshotAt: number | null }
 )
@@ -2549,6 +2635,8 @@ export interface PublicList {
   projectName: string
   projectColor: string
   rights: 'view' | 'tick'
+  /** Absent from older servers: list (public-link-board). */
+  layout?: 'list' | 'board'
   sections: { id: string; name: string; position: number }[]
   tasks: { id: string; title: string; due: Due | null; priority: Priority; section_id: string | null; parent_id: string | null; position: number; completed_at: number | null }[]
   serverTime: number
