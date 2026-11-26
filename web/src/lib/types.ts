@@ -401,8 +401,9 @@ export type FieldValue = string | number | boolean | null
 export type FieldType = 'text' | 'number' | 'date' | 'choice' | 'link' | 'checkbox'
 
 /**
- * A custom field definition of one project (OpenSpec `custom-fields`, design D1).
- * `project_id` and `type` never change after creation; `options` holds a choice
+ * A custom field definition of one project (OpenSpec `custom-fields`, design D1),
+ * or of a workspace when `project_id` is empty (`workspace-fields`, D1).
+ * `project_id`, `workspace_id` and `type` never change after creation; `options` holds a choice
  * field's options, one per line, in display order (`""` otherwise).
  */
 export interface FieldDef extends FieldDefFields {
@@ -846,6 +847,8 @@ export interface Reminder extends ReminderFields {
   deleted_at: number | null
   /** Metres, 100–5,000, only on the location kinds (absent on rows from older clients). */
   radius_m?: number | null
+  /** Rings as an alarm in the iPhone app (ios-urgent-alarms); absent on rows from older clients. */
+  urgent?: boolean
   _clock: Clock
 }
 
@@ -1029,11 +1032,13 @@ export interface UserPrefs extends UserPrefsFields {
   briefing?: string
   /** How a task opens from a list (task-side-panel D1): 'panel' docks it beside the list from 1024 px; '' and anything else read as 'page'. */
   task_open?: string
+  /** Click a task to (click-default D1): 'select' or 'open'; '' and anything else follow the server's default. */
+  row_click?: string
   /** The account's task row layout (row-layouts D1): 'line' or 'detailed'; '' and anything else read as 'line'. */
   row_layout?: string
   /** Today's agenda of calendar events (today-agenda D1): 'shown' shows it; '' and anything else read as hidden. */
   today_events?: string
-  /** Today hides tasks assigned to others (today-assigned-filter): 'mine' hides them; '' and anything else read as off. */
+  /** The personal lists show tasks assigned to others (others-tasks-toggle D1): 'all' shows them; '', 'mine' and anything else read as hidden. */
   today_assignees?: string
   /** Upcoming's calendar events (today-agenda): 'shown' lists them on each day; '' and anything else read as hidden. */
   upcoming_events?: string
@@ -1272,6 +1277,8 @@ export interface AuthStatus {
   branding?: { name: string; logoVersion: number }
   /** The version of the instance's themes (theme-instance-default D3), signed in only; absent on older servers. */
   themes?: { version: number }
+  /** What a click on a task does for accounts that have not chosen (click-default D2), signed in only; absent on older servers. */
+  rowClick?: { default: string }
   /** This session's wipe key (revoked-device-wipe D3), signed-in browser sessions only. */
   wipeKey?: string
   /** This cookie's session was revoked: the proof made with its wipe key (revoked-device-wipe D3). */
@@ -1355,6 +1362,57 @@ export interface CalendarEvent {
   end: CalendarWhen
   allDay: boolean
   free: boolean
+  /** The version to send with a change: events of connected calendars only (calendar-event-edits). */
+  rev?: string
+  /** Whether OpenTodo may change or delete the event, and why not; absent for subscribed calendars. */
+  access?: CalendarEventAccess
+  /** An assistant's change the user can still undo. */
+  changedBy?: { kind: 'assistant'; name: string }
+}
+
+/** What OpenTodo may do with an event of a connected calendar (calendar-event-edits D3). */
+export interface CalendarEventAccess {
+  update: boolean
+  delete: boolean
+  reason?: 'edits_off' | 'calendar_read_only' | 'recurring' | 'has_guests' | 'not_organizer' | 'no_etag' | 'refresh_pending'
+}
+
+/** A calendar's capabilities (calendar-event-edits D3). */
+export interface CalendarCaps {
+  create: boolean
+  update: boolean
+  delete: boolean
+}
+
+/** A change of an event: a new title, or a start and end together. */
+export interface CalendarEventPatch {
+  summary?: string
+  start?: CalendarWhen
+  end?: CalendarWhen
+  allDay?: boolean
+}
+
+/**
+ * One queued edit of an event of a connected calendar (calendar-event-edits D6): one row per
+ * event, device-local, never an op. `base` is the event before the first queued edit.
+ */
+export interface EventCommand {
+  /** `${connectionId}:${eventId}` */
+  key: string
+  connectionId: string
+  eventId: string
+  rev: string
+  base: CalendarEvent
+  patch: CalendarEventPatch | { delete: true }
+  /** An edit made while this one is in flight, sent after it against the new id. */
+  next?: CalendarEventPatch
+  /** A delete waits 8 s so Undo can cancel it. */
+  notBefore: number
+  sending?: boolean
+  /** When `sending` was set: a claim older than a few minutes (a closed tab, a crash) is taken again. */
+  sentAt?: number
+  /** Failed while online (5xx, 429, calendar unreachable, no answer): shown with Retry and Discard, never retried alone. */
+  failed?: string
 }
 
 /** A subscribed calendar and its status. */
@@ -1371,6 +1429,10 @@ export interface CalendarSubscription {
   eventCount?: number
   /** A calendar of a calendar sync connection (calendar-two-way), not one of the user's subscriptions. */
   managed?: boolean
+  connectionId?: string
+  calendarUrl?: string
+  caps?: CalendarCaps
+  editEvents?: boolean
 }
 
 /** One calendar of a calendar sync account, as discovery found it. */
@@ -1380,6 +1442,7 @@ export interface SyncCalendar {
   color: string
   time_zone?: string
   read_only: boolean
+  caps?: CalendarCaps
 }
 
 /** What one calendar sync cycle did. */
@@ -1422,6 +1485,9 @@ export interface CalendarConnection {
   event_count: number
   created_at: number
   updated_at: number
+  /** "Edit events in OpenTodo" and "Let assistants edit events"; absent from older servers: off. */
+  edit_events?: boolean
+  assistant_edits?: boolean
 }
 
 /** The owner's Google client for calendar sync; never the secret. */
@@ -1455,6 +1521,9 @@ export interface CalendarConnectionPatch {
   scope?: SyncScope
   /** Replaces the project-to-calendar matches; {} is one calendar again. */
   project_calendars?: Record<string, string>
+  /** "Edit events in OpenTodo" and "Let assistants edit events" (calendar-event-edits D12). */
+  edit_events?: boolean
+  assistant_edits?: boolean
 }
 
 /**
@@ -1615,6 +1684,8 @@ export interface OidcSettings {
   providerLogout: boolean
   /** The provider's `picture` claim becomes the profile picture at sign-in (oidc-profile-pictures); absent on older servers. */
   syncPictures?: boolean
+  /** A token without an email_verified claim may create a new account, never link one (sso-missing-email-verified); absent on older servers. */
+  trustMissingEmailVerified?: boolean
   /** Paste this into the provider's client configuration. */
   redirectUri: string
   /** False when the redirect URI was derived from the request (set OPENTODO_BASE_URL). */
@@ -1625,7 +1696,7 @@ export interface OidcSettings {
 
 /** A settings change; omitted fields are kept. `clientSecret: ''` removes the secret. */
 export type OidcSettingsInput = Partial<Pick<OidcSettings,
-  'issuer' | 'clientId' | 'clientSecret' | 'displayName' | 'scopes' | 'allowProvision' | 'ssoOnly' | 'providerLogout' | 'syncPictures'>>
+  'issuer' | 'clientId' | 'clientSecret' | 'displayName' | 'scopes' | 'allowProvision' | 'ssoOnly' | 'providerLogout' | 'syncPictures' | 'trustMissingEmailVerified'>>
 
 /** Result of POST /api/v1/settings/oidc/test. */
 export interface OidcTestResult {
@@ -2004,13 +2075,13 @@ export const AUDIT_EVENT_NAMES = [
   'account.email_change_requested',
   'account.email_changed',
   'account.avatar_changed',
-  'workspace.created', 'workspace.renamed', 'workspace.deleted', 'workspace.transferred',
+  'workspace.created', 'workspace.renamed', 'workspace.features_changed', 'workspace.deleted', 'workspace.transferred',
   'workspace.member_added', 'workspace.member_role_changed', 'workspace.member_removed',
   'workspace.group_created', 'workspace.group_deleted', 'workspace.group_member_added', 'workspace.group_member_removed',
   'project.member_added', 'project.grant_added', 'project.grant_changed', 'project.grant_removed',
   'workspace_invite.created', 'workspace_invite.accepted', 'workspace_invite.revoked',
   'member_invitation.created', 'member_invitation.accepted', 'member_invitation.declined', 'member_invitation.cancelled',
-  'calendar_connection.created', 'calendar_connection.updated', 'calendar_connection.deleted',
+  'calendar_connection.created', 'calendar_connection.updated', 'calendar_connection.deleted', 'calendar_event.changed',
   'project.agent_access',
   'task_page.published', 'task_page.revoked',
   'mcp_oauth.client_created', 'mcp_oauth.client_deleted', 'mcp_oauth.granted', 'mcp_oauth.revoked', 'mcp_oauth.refresh_reused', 'mcp_oauth.disconnected',
@@ -2250,6 +2321,12 @@ export interface Workspace {
   default: boolean
   role: WorkspaceRole
   ownerId: string
+  /**
+   * The features the owner and admins switched off, as `{id: false}`
+   * (workspace-feature-switches D2); a missing key, or no map from an older
+   * server, is on. Read with featureOn() in lib/features.ts.
+   */
+  features?: Record<string, boolean>
 }
 
 /** A member of a workspace, by name only (the directory is shown to every member). */

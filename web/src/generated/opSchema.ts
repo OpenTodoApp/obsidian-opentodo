@@ -320,6 +320,15 @@ export interface SectionFields {
 export interface FieldDefFields {
   name?: string
   project_id?: string
+  /**
+   * The workspace a field without a project belongs to (workspace-fields
+   * D1): an empty project_id makes the definition a workspace field that
+   * applies to every project of this workspace, before the projects' own
+   * fields. Null is the default workspace, as for a label. It lives in the
+   * author's personal scope and never changes after creation; it is
+   * ignored on a field with a project. Additive.
+   */
+  workspace_id?: string | null
   type?: string
   options?: string
   position?: number
@@ -496,6 +505,12 @@ export interface ReminderFields {
    * the task's encrypted location.
    */
   radius_m?: number | null
+  /**
+   * An urgent reminder (OpenSpec changes ios-urgent-alarms, design D1, and
+   * android-urgent-alarms): the iPhone and Android apps ring it as an alarm
+   * where they can; everywhere else it fires as an ordinary reminder. Not content.
+   */
+  urgent?: boolean
 }
 
 /**
@@ -928,6 +943,12 @@ export interface UserPrefsFields {
   /** The optional completion sound is enabled only by an explicit "on". */
   completion_sound?: string
   /**
+   * Completing a parent (OpenSpec change keep-open-subtasks, design D1):
+   * "keep" completes only the parent and leaves its open subtasks open
+   * (kept); empty or any other value completes them too.
+   */
+  complete_subtasks?: string
+  /**
    * The day pages' briefing (OpenSpec change briefing-links, design D4):
    * "hidden" hides it on Today and Upcoming; clients read an empty or
    * unknown value as shown.
@@ -939,6 +960,12 @@ export interface UserPrefsFields {
    * value as "page" and keep the stored value.
    */
   task_open?: string
+  /**
+   * Click a task to (OpenSpec change click-default, design D1): "select"
+   * (select, then edit the title) or "open" (open the details); clients
+   * read an empty or unknown value as the server's default and keep it.
+   */
+  row_click?: string
   /**
    * The account's task row layout (OpenSpec change row-layouts, design
    * D1): "line" or "detailed", the layout of every list without its own
@@ -952,9 +979,10 @@ export interface UserPrefsFields {
    */
   today_events?: string
   /**
-   * Today hides tasks assigned to others (OpenSpec change
-   * today-assigned-filter): "mine" omits them; clients read an empty or
-   * unknown value as off and keep the stored value. Settings, never content.
+   * Show tasks assigned to others in the personal lists (OpenSpec change
+   * others-tasks-toggle): "all" shows them; clients read empty, "mine"
+   * (today-assigned-filter's hide) and unknown values as hidden and keep
+   * the stored value. Settings, never content.
    */
   today_assignees?: string
   /**
@@ -1018,6 +1046,17 @@ export interface UserPrefsFields {
    * tone.
    */
   focus_alert?: string
+  /**
+   * The person's Focus session on every device (OpenSpec change
+   * sync-focus-sessions, design D1): one JSON record {v, rev, taskId,
+   * mode, phase, startedAt, resumedAt, accumulatedMs, plannedMs, cycle,
+   * breakKind, entryId, ended}, written on user actions only and never
+   * while a session merely runs. One field so a conflict keeps one whole
+   * session by last-writer-wins. Ids and times only, never content;
+   * clients ignore and keep a value they cannot read, and the importer
+   * drops it, a backup restore resets it. Times are server time.
+   */
+  focus_run?: string
   /**
    * Today grouped by part of the day (OpenSpec change day-parts, design
    * D3): "on" groups Today into Morning, Afternoon and This Evening and
@@ -1122,10 +1161,14 @@ export interface UserPrefsFields {
   today_group_by?: string
   /**
    * Today's order (builtin-view-options D2): "due", "priority", "created",
-   * "deadline", "title" or "field:<id>"; empty or unknown reads as "due".
+   * "deadline", "title", "position" (the day order) or "field:<id>"; empty or
+   * unknown reads as "due".
    */
   today_sort_by?: string
-  /** Task IDs placed by hand in Today's project groups, in personal order. */
+  /**
+   * Task IDs placed by hand in the day order Today and Upcoming share
+   * (day-manual-order), in personal order; whole-list last-writer-wins.
+   */
   today_manual_order?: string[]
   /** Today's order direction: "asc" or "desc"; empty or unknown reads as "asc". */
   today_sort_dir?: string
@@ -1142,7 +1185,8 @@ export interface UserPrefsFields {
   today_subtasks?: string
   /**
    * Upcoming's order within each day (builtin-view-options D2, D4): the
-   * same values as today_sort_by; empty or unknown reads as "due".
+   * same values as today_sort_by ("position": the shared day order); empty
+   * or unknown reads as "due".
    */
   upcoming_sort_by?: string
   /** Upcoming's order direction: "asc" or "desc"; empty or unknown reads as "asc". */
@@ -1205,6 +1249,14 @@ export interface UserPrefsFields {
   daily_notes_project?: string
   daily_notes_template?: string
   app_link_schemes?: string
+  /**
+   * Calendars hidden per workspace (OpenSpec change calendars-per-workspace,
+   * design D1): a JSON object from workspace id to the ids of the calendars
+   * (subscriptions and calendar sync calendars) hidden there; "" hides none.
+   * A hide-list, so new calendars and workspaces show. Clients read a
+   * malformed value as none hidden and ignore unknown ids. Not content.
+   */
+  calendars_hidden?: string
   /**
    * The away period (OpenSpec change away-periods, design D3): "" or
    * "YYYY-MM-DD..YYYY-MM-DD", inclusive, followed by " quiet" when
@@ -1325,7 +1377,7 @@ export const OP_DEFAULTS = {
     name: '', project_id: '', position: 0, created_at: 0, deleted_at: null, color: null, icon: null, flow_mode: '', aisle: null,
   } satisfies Omit<Section, 'id' | '_clock'>,
   field: {
-    name: '', project_id: '', type: 'text', options: '', position: 0, created_at: 0, deleted_at: null,
+    name: '', project_id: '', workspace_id: null, type: 'text', options: '', position: 0, created_at: 0, deleted_at: null,
   } satisfies Omit<FieldDef, 'id' | '_clock'>,
   note: {
     title: '', notes_doc: '', description: '', project_id: null, labels: [], position: 0, created_at: 0, deleted_at: null, workspace_id: null, template: false, day: '', appends: {},
@@ -1337,7 +1389,7 @@ export const OP_DEFAULTS = {
     name: '', query: '', kind: 'list', group_by: 'project', sort_by: 'due', sort_dir: 'asc', pinned: false, position: 0, color: '#64748b', panels: [], on_drop: null, layout: 'list', show_completed: false, hidden_props: [], row_layout: '', card_notes: false, subtasks: '', created_at: 0, deleted_at: null, workspace_id: null, icon: null, manual_order: [],
   } satisfies Omit<View, 'id' | '_clock'>,
   reminder: {
-    task_id: '', kind: 'relative', offset_minutes: null, fire_at: null, delivered_at: null, dismissed_at: null, created_at: 0, deleted_at: null, radius_m: null,
+    task_id: '', kind: 'relative', offset_minutes: null, fire_at: null, delivered_at: null, dismissed_at: null, created_at: 0, deleted_at: null, radius_m: null, urgent: false,
   } satisfies Omit<Reminder, 'id' | '_clock'>,
   comment: {
     task_id: '', parent_id: null, body: '', author_id: '', mentions: [], created_at: 0, edited_at: null, deleted_at: null, guest_name: null, page_id: null, reactions: {},
@@ -1370,7 +1422,7 @@ export const OP_DEFAULTS = {
     feed_seen_at: 0, reviewed_at: 0, group_by: '', sort_by: '', sort_dir: '', row_layout: '', review_every: '', card_notes: false,
   } satisfies Omit<ProjectPrefs, 'id' | '_clock'>,
   user_prefs: {
-    date_format: 'system', time_format: 'system', week_start: 'system', day_start: '', theme_mode: 'system', theme_accent: 'emerald', theme_accent_custom: '', theme_light: '', theme_dark: '', sidebar_destinations: '', density: '', row_detail: '', favourites: '', first_run: '', welcome: '', method_mode: '', time_sectors: '', start_checklist: '', language: 'system', focus_mode: '', focus_auto_start: '', focus_sound: '', focus_work_minutes: 0, focus_short_break_minutes: 0, focus_long_break_minutes: 0, focus_long_break_every: 0, focus_break_after_minutes: 0, maps: '', haptics: '', completion_sound: '', briefing: '', task_open: '', row_layout: '', today_events: '', today_assignees: '', upcoming_events: '', add_position: '', reminder_default_timed: '', reminder_default_dated: '', sidebar_counts: '', sidebar_order: '', focus_presets: '', focus_noise: '', focus_alert: '', day_parts: '', today_limit: 0, today_done: '', focus_style: '', energy: '', bento_order: '', formatting_toggle: '', routines_seen_at: 0, routines_hide_successes: '', upcoming_today: '', objectives: '', habits: '', full_titles: '', deadline_dates: '', today_group_by: '', today_sort_by: '', today_manual_order: [], today_sort_dir: '', today_row_layout: '', today_subtasks: '', upcoming_sort_by: '', upcoming_sort_dir: '', upcoming_row_layout: '', upcoming_subtasks: '', upcoming_later: '', inbox_group_by: '', inbox_sort_by: '', inbox_sort_dir: '', inbox_row_layout: '', priority_name_1: '', priority_name_2: '', priority_name_3: '', priority_name_4: '', daily_notes: false, daily_notes_project: '', daily_notes_template: '', app_link_schemes: '', away: '',
+    date_format: 'system', time_format: 'system', week_start: 'system', day_start: '', theme_mode: 'system', theme_accent: 'emerald', theme_accent_custom: '', theme_light: '', theme_dark: '', sidebar_destinations: '', density: '', row_detail: '', favourites: '', first_run: '', welcome: '', method_mode: '', time_sectors: '', start_checklist: '', language: 'system', focus_mode: '', focus_auto_start: '', focus_sound: '', focus_work_minutes: 0, focus_short_break_minutes: 0, focus_long_break_minutes: 0, focus_long_break_every: 0, focus_break_after_minutes: 0, maps: '', haptics: '', completion_sound: '', complete_subtasks: '', briefing: '', task_open: '', row_click: '', row_layout: '', today_events: '', today_assignees: '', upcoming_events: '', add_position: '', reminder_default_timed: '', reminder_default_dated: '', sidebar_counts: '', sidebar_order: '', focus_presets: '', focus_noise: '', focus_alert: '', focus_run: '', day_parts: '', today_limit: 0, today_done: '', focus_style: '', energy: '', bento_order: '', formatting_toggle: '', routines_seen_at: 0, routines_hide_successes: '', upcoming_today: '', objectives: '', habits: '', full_titles: '', deadline_dates: '', today_group_by: '', today_sort_by: '', today_manual_order: [], today_sort_dir: '', today_row_layout: '', today_subtasks: '', upcoming_sort_by: '', upcoming_sort_dir: '', upcoming_row_layout: '', upcoming_subtasks: '', upcoming_later: '', inbox_group_by: '', inbox_sort_by: '', inbox_sort_dir: '', inbox_row_layout: '', priority_name_1: '', priority_name_2: '', priority_name_3: '', priority_name_4: '', daily_notes: false, daily_notes_project: '', daily_notes_template: '', app_link_schemes: '', calendars_hidden: '', away: '',
   } satisfies Omit<UserPrefs, 'id' | '_clock'>,
   objective: {
     title: '', period: '', position: 0, done_at: 0, created_at: 0, deleted_at: null,
